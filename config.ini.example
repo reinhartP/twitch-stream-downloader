@@ -1,0 +1,30 @@
+; any elements in an array must be encased in quotation marks
+
+; both directories can be the same. 
+; both of the formats below work so does D:\
+[default]
+capture_directory = D:/capture
+complete_directory = D:\\complete
+
+[twitch_categories]
+restrict = False
+games = ["509658", "", "509672", "26936", "509663", "509667"]
+; the categories above are [just chatting, no category, travel & outdoors, music, special events, food and drink]
+; can use the twitch api to find the category ids
+
+; fill in your client_id and secret from twitch
+[twitchapi]
+client_id = 
+client_secret = 
+bearer_token = 0
+expires = 0
+
+; forced streamers are ones where everything is recorded, regardless of category
+; if a streamer is under forced_streamers it should also be under streamers
+[streamers]
+streamers = ["summit1g", "lirik", "monstercat", "sodapoppin"]
+forced_streamers = ["monstercat", "lirik"]
+include = []
+exclude = []
+force_include = []
+force_exclude = []
