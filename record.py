@@ -2,11 +2,12 @@ import logging
 import twitch
 import requests
 import os
+import yaml
 import time
 from streamer import Streamer
 import configparser
 import json
-
+import traceback
 
 logger = logging.getLogger(__name__)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
@@ -38,9 +39,6 @@ class Record:
         self.__client_id = self.__config["twitchapi"]["client_id"]
         self.__client_secret = self.__config["twitchapi"]["client_secret"]
         self.__bearer_token_expiration = self.__config.getfloat("twitchapi", "expires")
-        logger.debug(
-            f"loaded bearer token expires at {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(self.__bearer_token_expiration))}"
-        )
         self.__bearer_token = self.__config["twitchapi"]["bearer_token"]
         self.__restrict_games = self.__config.getboolean(
             "twitch_categories", "restrict"
@@ -105,7 +103,7 @@ class Record:
                 if streamer_name in self.__streamers:
                     try:
                         temp_streamer = self.__streamers.get(streamer_name)
-                        if temp_streamer.get_recording_status() is True:
+                        if temp_streamer.get_recording_status() == True:
                             temp_streamer.stop_recording()
                         del self.__streamers[streamer_name]
                         streamers.remove(streamer_name)
@@ -147,18 +145,17 @@ class Record:
     def __get_streamers_id(self, streamers):
         if time.time() > self.__bearer_token_expiration:
             self.__get_bearer_token()
-        twitch.Helix(self.__client_id)
+        helix = twitch.Helix(self.__client_id)
         headers = {
             "Authorization": f"Bearer {self.__bearer_token}",
             "Client-ID": self.__client_id,
         }
         params = {"login": streamers}
-        try:
-            response = requests.get(
-                "https://api.twitch.tv/helix/users", params=params, headers=headers
-            )
-        except ConnectionError:
-            logger.error("Connection error in __get_streamers_id.", exc_info=True)
+
+        response = requests.get(
+            "https://api.twitch.tv/helix/users", params=params, headers=headers
+        )
+
         response.close()
         response = response.json()
         streamers_with_id = dict()
@@ -170,23 +167,18 @@ class Record:
     def __get_bearer_token(self):
         current_time = time.time()
         endpoint = f"https://id.twitch.tv/oauth2/token?client_id={self.__client_id}&client_secret={self.__client_secret}&grant_type=client_credentials"
-        try:
-            r = requests.post(endpoint)
-        except ConnectionError:
-            logger.error("Connection error in __get_bearer_token.", exc_info=True)
+
+        r = requests.post(endpoint)
+
         r.close()
         r = r.json()
-
         self.__bearer_token = r["access_token"]
-        self.__bearer_token_expiration = float(current_time + r["expires_in"])
+        self.__bearer_token_expiration = int(current_time + r["expires_in"])
         self.__config.read(self.__config_path)
         self.__config["twitchapi"]["expires"] = str(current_time + r["expires_in"])
         self.__config["twitchapi"]["bearer_token"] = r["access_token"]
         with open(os.path.join(self.__current_directory, "config.ini"), "w") as f:
             self.__config.write(f)
-        logger.debug(
-            f"new bearer token expires at {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(self.__bearer_token_expiration))}"
-        )
 
     def __is_live(self):
         """
@@ -197,18 +189,16 @@ class Record:
         """
         if time.time() > self.__bearer_token_expiration:
             self.__get_bearer_token()
-        twitch.Helix(self.__client_id)
+        helix = twitch.Helix(self.__client_id)
         headers = {
             "Authorization": f"Bearer {self.__bearer_token}",
             "Client-ID": self.__client_id,
         }
         params = {"user_login": self.__streamers}
-        try:
-            r = requests.get(
-                "https://api.twitch.tv/helix/streams", params=params, headers=headers
-            )
-        except ConnectionError:
-            logger.error("Connection error in __is_live.", exc_info=True)
+
+        r = requests.get(
+            "https://api.twitch.tv/helix/streams", params=params, headers=headers
+        )
 
         response_headers = r.headers
         r.close()
@@ -217,8 +207,7 @@ class Record:
             print(f"[{current_time}] rate limit reached, retrying in 30 seconds")
             print(r.json())
             print(
-                f"{response_headers.get('ratelimit-remaining')} \
-                {float(response_headers.get('ratelimit-reset')) - time.time()}"
+                f"{response_headers.get('ratelimit-remaining')} {float(response_headers.get('ratelimit-reset')) - time.time()}"
             )
             time.sleep(30)
             return -1
@@ -230,12 +219,15 @@ class Record:
                     for streamer in response["data"]:  # go through online streamers
                         username = self.__streamer_ids[streamer["user_id"]]
                         if (
-                            self.__restrict_games is False
+                            self.__restrict_games == False
                             or streamer.get("game_id") in self.__games
                             or username in self.__forced_streamers
                         ):
                             self.__streamers[username].set_live_status(True)
                             streamers.remove(username)
+                    for streamer in streamers:
+                        self.__streamers[streamer].set_live_status(False)
+                else:
                     for streamer in streamers:
                         self.__streamers[streamer].set_live_status(False)
             except KeyError as e:
@@ -248,10 +240,7 @@ class Record:
         """
             If the streamer is live, check if recording, if not then start recording
             If the streamer is offline, check if recording, if it is recording then stop recording
-            Returns -1 if recording stopped,
-                    0 if nothing happened,
-                    1 if recording started,
-                    2 if file size exceeded max(stop and start recording)
+            Returns -1 if recording stopped, 0 if nothing happened, 1 if recording started, 2 if file size exceeded max(stop and start recording)
         """
         current_time = self.__get_current_time()
         streamer_name = streamer.get_name()
@@ -261,15 +250,15 @@ class Record:
         logger.debug(
             f"{streamer_name:16} - live: {str(live_status):5} - recording: {str(recording_status)}"
         )
-        if live_status is True and recording_status is False:
+        if live_status == True and recording_status == False:
             print(f"[{current_time}] {streamer_name} recording started")
             streamer.start_recording()
             return 1
-        elif live_status is False and recording_status is True:
+        elif live_status == False and recording_status == True:
             print(f"[{current_time}] {streamer_name} offline")
             streamer.stop_recording()
             return -1
-        elif recording_status is True and self.__check_file_size(streamer):
+        elif recording_status == True and self.__check_file_size(streamer):
             print(
                 f"[{current_time}] {streamer_name} file size exceeded. Restarting recording."
             )
@@ -279,9 +268,11 @@ class Record:
         return 0
 
     def __check_file_size(self, streamer):
-        if os.stat(
+        file_size = os.stat(
             os.path.join(self.__capture_directory, streamer.get_filename())
-        ).st_size > (1024 * 1024 * 1024 * 8.25):
+        ).st_size
+        logger.debug(f"{streamer.get_filename} is {file_size/(1024*1024)}MB")
+        if file_size > (1024 * 1024 * 1024 * 8.25):
             return True
         return False
 
@@ -318,9 +309,7 @@ class Record:
         self.__online = online.copy()
         self.__offline = offline.copy()
         print(
-            f"\n----------\
-                [{self.__get_current_time()}] {changed_streamers} went {online_or_offline}\
-                ----------\n"
+            f"\n----------[{self.__get_current_time()}] {changed_streamers} went {online_or_offline}----------\n"
         )
         print(f"online:  {online}")
         print(f"offline: {offline}")
@@ -333,8 +322,8 @@ class Record:
             if self.__is_live() == -1:  # 429 error
                 continue
             for key, streamer in self.__streamers.items():
-                self.__check_recording(streamer)
-                if streamer.get_live_status() is True:
+                recording_status = self.__check_recording(streamer)
+                if streamer.get_live_status() == True:
                     temp_online.append(streamer.get_name())
                 else:
                     temp_offline.append(streamer.get_name())
@@ -346,7 +335,7 @@ class Record:
 
     def cleanup(self):
         for key, streamer in self.__streamers.items():
-            if streamer.get_recording_status() is True:
+            if streamer.get_recording_status() == True:
                 streamer.stop_recording()
 
     def __get_current_time(self):
@@ -361,7 +350,20 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("program exiting. cleaning up...")
         record.cleanup()
-    except:
+    finally:
+        discord_webhook = "https://discordapp.com/api/webhooks/410561282991980554/hxmsqli36rH2DITpWnmy8yV_gpe4LGVW_qDfhb65AV6j9diNbwlx6PfQvccaDVdEd7Wi"
+        body = {
+            "username": "rpi_twitch_recorder_bot",
+            "content": "fatal error caused script to exit.",
+            "embeds": [
+                {
+                    "title": "Error",
+                    "description": f"{traceback.format_exc()}",
+                    "color": 7506394,
+                },
+            ],
+        }
+        requests.post(discord_webhook, body)
         logger.fatal("fatal error occured.", exc_info=True)
         print("some error occurred. cleaning up before exiting")
         record.cleanup()
