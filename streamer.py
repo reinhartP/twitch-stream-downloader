@@ -1,7 +1,9 @@
 import time
-from datetime import datetime
 import subprocess
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Streamer:
@@ -14,9 +16,9 @@ class Streamer:
         self.__recording = False
         self.__process = None
         self.__filename = None
+        logger.info(f"Created Streamer object for {name}")
 
     def start_recording(self):
-        print(f"started recording for {self.__name}")
         file_time = time.strftime("%Y-%m-%d_%H-%M-%S")
         self.__filename = f"twitch_{self.__name}_{file_time}.ts"
         self.__process = subprocess.Popen(
@@ -26,17 +28,21 @@ class Streamer:
             stdin=subprocess.PIPE,
         )
         self.__recording = True
+        logger.info(
+            f"Started recording for {self.__name} ({self.__process.pid}) - {self.__filename}"
+        )
 
     def stop_recording(self):
-        print(f"\n[{self.__get_current_time()}] {self.__name} offline\t\t\t\t")
+        self.__process.kill()
+        self.__process = None
+        self.__recording = False
+        time.sleep(2)
         os.rename(
             os.path.join(self.__capture_path, self.__filename),
             os.path.join(self.__complete_path, self.__filename),
         )
         self.__filename = None
-        self.__process.kill()
-        self.__process = None
-        self.__recording = False
+        logger.info(f"Stopped recording for {self.__name} - {self.__filename}")
 
     def __get_current_time(self) -> str:
         return time.strftime("%H:%M:%S")
