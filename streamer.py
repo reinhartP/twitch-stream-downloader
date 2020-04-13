@@ -1,7 +1,9 @@
 import time
+from datetime import datetime
 import subprocess
 import os
 import logging
+import signal
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +24,14 @@ class Streamer:
         file_time = time.strftime("%Y-%m-%d_%H-%M-%S")
         self.__filename = f"twitch_{self.__name}_{file_time}.ts"
         self.__process = subprocess.Popen(
-            f"streamlink -o {os.path.join(self.__capture_path, self.__filename)} --force twitch.tv/{self.__name} best",
+            [
+                "streamlink",
+                "-o",
+                f"{os.path.join(self.__capture_path, self.__filename)}",
+                "--force",
+                f"twitch.tv/{self.__name}",
+                "best",
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             stdin=subprocess.PIPE,
@@ -33,7 +42,7 @@ class Streamer:
         )
 
     def stop_recording(self):
-        self.__process.kill()
+        self.__process.terminate()
         self.__process = None
         self.__recording = False
         time.sleep(2)
