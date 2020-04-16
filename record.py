@@ -1,5 +1,4 @@
 import logging
-import twitch
 import requests
 import os
 import yaml
@@ -145,7 +144,6 @@ class Record:
     def __get_streamers_id(self, streamers):
         if time.time() > self.__bearer_token_expiration:
             self.__get_bearer_token()
-        helix = twitch.Helix(self.__client_id)
         headers = {
             "Authorization": f"Bearer {self.__bearer_token}",
             "Client-ID": self.__client_id,
@@ -189,7 +187,6 @@ class Record:
         """
         if time.time() > self.__bearer_token_expiration:
             self.__get_bearer_token()
-        helix = twitch.Helix(self.__client_id)
         headers = {
             "Authorization": f"Bearer {self.__bearer_token}",
             "Client-ID": self.__client_id,
