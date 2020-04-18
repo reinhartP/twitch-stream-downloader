@@ -5,6 +5,7 @@
 [default]
 capture_directory = D:/capture
 complete_directory = D:\\complete
+discord_webhook = 
 
 [twitch_categories]
 restrict = False
