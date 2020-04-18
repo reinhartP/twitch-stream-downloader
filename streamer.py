@@ -46,10 +46,14 @@ class Streamer:
         self.__process = None
         self.__recording = False
         time.sleep(2)
-        os.rename(
-            os.path.join(self.__capture_path, self.__filename),
-            os.path.join(self.__complete_path, self.__filename),
-        )
+        try:
+            os.rename(
+                os.path.join(self.__capture_path, self.__filename),
+                os.path.join(self.__complete_path, self.__filename),
+            )
+        except FileNotFoundError:
+            logger.error(f"{self.__filename} not found. probably deleted by user")
+            pass
         self.__filename = None
         logger.info(f"Stopped recording for {self.__name} - {self.__filename}")
 
