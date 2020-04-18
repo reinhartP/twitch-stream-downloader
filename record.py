@@ -3,10 +3,11 @@ import requests
 import os
 import yaml
 import time
-from streamer import Streamer
 import configparser
 import json
 import traceback
+from streamer import Streamer
+from api import API as twitch
 
 logger = logging.getLogger(__name__)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
@@ -18,7 +19,7 @@ class Record:
         self.__config_path = os.path.join(self.__current_directory, "config.ini")
         self.__config = configparser.ConfigParser()
         self.__config.read(self.__config_path)
-
+        self.__discord_webhook = self.__config["default"]["discord_webhook"]
         logging.basicConfig(
             filename=os.path.join(self.__current_directory, "app.log"),
             format="[%(levelname)s] %(asctime)s - %(name)s - %(message)s",
@@ -37,8 +38,14 @@ class Record:
         )
         self.__client_id = self.__config["twitchapi"]["client_id"]
         self.__client_secret = self.__config["twitchapi"]["client_secret"]
-        self.__bearer_token_expiration = self.__config.getfloat("twitchapi", "expires")
-        self.__bearer_token = self.__config["twitchapi"]["bearer_token"]
+        self.__helix = twitch(
+            self.__client_id,
+            self.__client_secret,
+            self.__config["twitchapi"]["bearer_token"],
+            self.__config.getfloat("twitchapi", "expires"),
+        )
+        self.__bearer_token_expiration = self.__helix.get_bearer_token_expiration()
+        self.__bearer_token = self.__helix.get_bearer_token()
         self.__restrict_games = self.__config.getboolean(
             "twitch_categories", "restrict"
         )
@@ -138,45 +145,35 @@ class Record:
         self.__config["streamers"]["exclude"] = json.dumps([])
         self.__config["streamers"]["force_include"] = json.dumps([])
         self.__config["streamers"]["force_exclude"] = json.dumps([])
-        with open(os.path.join(self.__current_directory, "config2.ini"), "w") as f:
+        self.__update_config()
+
+    def __update_config(self):
+        with open(self.__config_path, "w") as f:
             self.__config.write(f)
 
     def __get_streamers_id(self, streamers):
         if time.time() > self.__bearer_token_expiration:
-            self.__get_bearer_token()
-        headers = {
-            "Authorization": f"Bearer {self.__bearer_token}",
-            "Client-ID": self.__client_id,
-        }
+            self.__update_bearer_token()
+
         params = {"login": streamers}
 
-        response = requests.get(
-            "https://api.twitch.tv/helix/users", params=params, headers=headers
+        response = self.__helix.request(
+            "GET", "https://api.twitch.tv/helix/users", params=params
         )
 
-        response.close()
-        response = response.json()
         streamers_with_id = dict()
         for streamer in response["data"]:
             streamers_with_id[streamer["login"]] = streamer["id"]
             self.__streamer_ids[streamer["id"]] = streamer["login"]
         return streamers_with_id
 
-    def __get_bearer_token(self):
-        current_time = time.time()
-        endpoint = f"https://id.twitch.tv/oauth2/token?client_id={self.__client_id}&client_secret={self.__client_secret}&grant_type=client_credentials"
-
-        r = requests.post(endpoint)
-
-        r.close()
-        r = r.json()
-        self.__bearer_token = r["access_token"]
-        self.__bearer_token_expiration = int(current_time + r["expires_in"])
+    def __update_bearer_token(self):
+        self.__bearer_token = self.__helix.get_bearer_token()
+        self.__bearer_token_expiration = self.__helix.get_bearer_token_expiration()
         self.__config.read(self.__config_path)
-        self.__config["twitchapi"]["expires"] = str(current_time + r["expires_in"])
-        self.__config["twitchapi"]["bearer_token"] = r["access_token"]
-        with open(os.path.join(self.__current_directory, "config.ini"), "w") as f:
-            self.__config.write(f)
+        self.__config["twitchapi"]["expires"] = self.__bearer_token_expiration
+        self.__config["twitchapi"]["bearer_token"] = self.__bearer_token
+        self.__update_config()
 
     def __is_live(self):
         """
@@ -186,51 +183,38 @@ class Record:
             If the streamer is offline, mark them as offline
         """
         if time.time() > self.__bearer_token_expiration:
-            self.__get_bearer_token()
-        headers = {
-            "Authorization": f"Bearer {self.__bearer_token}",
-            "Client-ID": self.__client_id,
-        }
+            self.__update_bearer_token()
+
         params = {"user_login": self.__streamers}
 
-        r = requests.get(
-            "https://api.twitch.tv/helix/streams", params=params, headers=headers
+        response = self.__helix.request(
+            "GET", "https://api.twitch.tv/helix/streams", params=params
         )
 
-        response_headers = r.headers
-        r.close()
         current_time = self.__get_current_time()
-        if r.status_code == 429:
-            print(f"[{current_time}] rate limit reached, retrying in 30 seconds")
-            print(r.json())
-            print(
-                f"{response_headers.get('ratelimit-remaining')} {float(response_headers.get('ratelimit-reset')) - time.time()}"
-            )
+
+        try:
+            streamers = list(self.__streamers.keys())
+            if len(response["data"]) > 0:
+                for streamer in response["data"]:  # go through online streamers
+                    username = self.__streamer_ids[streamer["user_id"]]
+                    if (
+                        self.__restrict_games == False
+                        or streamer.get("game_id") in self.__games
+                        or username in self.__forced_streamers
+                    ):
+                        self.__streamers[username].set_live_status(True)
+                        streamers.remove(username)
+                for streamer in streamers:
+                    self.__streamers[streamer].set_live_status(False)
+            else:
+                for streamer in streamers:
+                    self.__streamers[streamer].set_live_status(False)
+        except KeyError as e:
+            print(f"keyerror {response}")
+            print(e.args[0])
             time.sleep(30)
-            return -1
-        else:
-            response = r.json()
-            try:
-                streamers = list(self.__streamers.keys())
-                if len(response["data"]) > 0:
-                    for streamer in response["data"]:  # go through online streamers
-                        username = self.__streamer_ids[streamer["user_id"]]
-                        if (
-                            self.__restrict_games == False
-                            or streamer.get("game_id") in self.__games
-                            or username in self.__forced_streamers
-                        ):
-                            self.__streamers[username].set_live_status(True)
-                            streamers.remove(username)
-                    for streamer in streamers:
-                        self.__streamers[streamer].set_live_status(False)
-                else:
-                    for streamer in streamers:
-                        self.__streamers[streamer].set_live_status(False)
-            except KeyError as e:
-                print(f"keyerror {response}")
-                print(e.args[0])
-                time.sleep(30)
+
         return 0
 
     def __check_recording(self, streamer) -> int:
@@ -265,12 +249,17 @@ class Record:
         return 0
 
     def __check_file_size(self, streamer):
-        file_size = os.stat(
-            os.path.join(self.__capture_directory, streamer.get_filename())
-        ).st_size
-        logger.debug(f"{streamer.get_filename} is {file_size/(1024*1024)}MB")
-        if file_size > (1024 * 1024 * 1024 * 8.25):
-            return True
+        try:
+            file_size = os.stat(
+                os.path.join(self.__capture_directory, streamer.get_filename())
+            ).st_size
+            logger.debug(f"{streamer.get_filename} is {file_size/(1024*1024)}MB")
+            if file_size > (1024 * 1024 * 1024 * 8.25):
+                return True
+        except FileNotFoundError:
+            # file was most likely deleted by user. return false which restarts recording
+            logger.error(f"{streamer.get_filename} not found. probably deleted by user")
+            pass
         return False
 
     def __find_differences_in_lists(self, bigger, smaller):
@@ -338,6 +327,9 @@ class Record:
     def __get_current_time(self):
         return time.strftime("%H:%M:%S")
 
+    def get_discord_Webhook(self):
+        return self.__discord_webhook
+
 
 if __name__ == "__main__":
     logger.info("program start")
@@ -347,20 +339,23 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("program exiting. cleaning up...")
         record.cleanup()
-    finally:
-        discord_webhook = "https://discordapp.com/api/webhooks/410561282991980554/hxmsqli36rH2DITpWnmy8yV_gpe4LGVW_qDfhb65AV6j9diNbwlx6PfQvccaDVdEd7Wi"
-        body = {
-            "username": "rpi_twitch_recorder_bot",
-            "content": "fatal error caused script to exit.",
-            "embeds": [
-                {
-                    "title": "Error",
-                    "description": f"{traceback.format_exc()}",
-                    "color": 7506394,
-                },
-            ],
-        }
-        requests.post(discord_webhook, body)
+    except:
+        discord_webhook = record.get_discord_Webhook()
+        if discord_webhook != "":
+            body = {
+                "username": "twitch_recorder_bot",
+                "content": "fatal error caused script to exit.",
+                "embeds": [
+                    {
+                        "title": "Error",
+                        "description": f"{traceback.format_exc()}",
+                        "color": 7506394,
+                    },
+                ],
+            }
+            requests.post(
+                discord_webhook, headers={"Content-Type": "application/json"}, json=body
+            )
         logger.fatal("fatal error occured.", exc_info=True)
         print("some error occurred. cleaning up before exiting")
         record.cleanup()
