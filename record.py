@@ -24,7 +24,7 @@ class Record:
             filename=os.path.join(self.__current_directory, "app.log"),
             format="[%(levelname)s] %(asctime)s - %(name)s - %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
-            level=logging.DEBUG,
+            level=logging.WARNING,
         )
 
         self.__streamers = dict()
@@ -175,7 +175,7 @@ class Record:
         self.__config["twitchapi"]["bearer_token"] = self.__bearer_token
         self.__update_config()
 
-    def __is_live(self):
+    def __update_streamer_status(self):
         """
             Check which streamers are online. Querying the endpoint returns which streamers are live, if they are
             offline they aren't included in the response.
@@ -214,8 +214,6 @@ class Record:
             print(f"keyerror {response}")
             print(e.args[0])
             time.sleep(30)
-
-        return 0
 
     def __check_recording(self, streamer) -> int:
         """
@@ -305,17 +303,20 @@ class Record:
             temp_online = []
             temp_offline = []
             self.__update_streamers()
-            if self.__is_live() == -1:  # 429 error
-                continue
-            for key, streamer in self.__streamers.items():
-                recording_status = self.__check_recording(streamer)
-                if streamer.get_live_status() == True:
-                    temp_online.append(streamer.get_name())
-                else:
-                    temp_offline.append(streamer.get_name())
-            temp_online.sort()
-            temp_offline.sort()
-            self.__status_changes(temp_online, temp_offline)
+            try:
+                self.__update_streamer_status()
+                for key, streamer in self.__streamers.items():
+                    recording_status = self.__check_recording(streamer)
+                    if streamer.get_live_status() == True:
+                        temp_online.append(streamer.get_name())
+                    else:
+                        temp_offline.append(streamer.get_name())
+                temp_online.sort()
+                temp_offline.sort()
+                self.__status_changes(temp_online, temp_offline)
+            except ConnectionError as e:
+                logger.error("fatal error occured.", exc_info=True)
+                pass
 
             time.sleep(15)
 
