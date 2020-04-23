@@ -57,7 +57,10 @@ class API:
         ).prepare()
         self.__handle_rate_limit()
         while True:
-            response = requests.Session().send(request)
+            try:
+                response = requests.Session().send(request)
+            except ConnectionError:
+                raise
             self.__set_rate_limit(response)
 
             if response.status_code == 429:
