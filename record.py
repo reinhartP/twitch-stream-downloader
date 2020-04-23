@@ -290,6 +290,7 @@ class Record:
             recording bigger then started recording
             recording same size then check if there were any changes
         """
+        started = stopped = []
         if len(new) < len(old):
             # differences are offline or stopped
             started = self.__find_differences_in_lists(old, new)
