@@ -20,6 +20,7 @@ class Record:
         self.__config = configparser.ConfigParser()
         self.__config.read(self.__config_path)
         self.__discord_webhook = self.__config["default"]["discord_webhook"]
+        self.__verbosity = int(self.__config["default"]["verbosity"])
         logging.basicConfig(
             filename=os.path.join(self.__current_directory, "app.log"),
             format="[%(levelname)s] %(asctime)s - %(name)s - %(message)s",
@@ -52,6 +53,7 @@ class Record:
         self.__games = json.loads(self.__config["twitch_categories"]["games"])
         self.__online = []
         self.__offline = []
+        self.__recording = []
         self.__load_streamers()
 
     def __load_streamers(self):
@@ -232,10 +234,12 @@ class Record:
         if live_status == True and recording_status == False:
             print(f"[{current_time}] {streamer_name} recording started")
             streamer.start_recording()
+            self.__recording.append(streamer.get_name())
             return 1
         elif live_status == False and recording_status == True:
             print(f"[{current_time}] {streamer_name} offline")
             streamer.stop_recording()
+            self.__recording.remove(streamer.get_name())
             return -1
         elif recording_status == True and self.__check_file_size(streamer):
             print(
@@ -261,11 +265,24 @@ class Record:
         return False
 
     def __find_differences_in_lists(self, bigger, smaller):
+        """
+            Finds what's different in the "bigger" list (bigger list can be the same size as smaller)
+            [2,3,4] and [2,1,4] returns [3]
+            [2,1,4] and [2,3,4] returns [1]
+        """
         differences = []
         for element in bigger:
             if element not in smaller:
                 differences.append(element)
         return differences
+
+    def __format_list(self, list_to_format):
+        output = ""
+        for idx, element in enumerate(list_to_format):
+            if idx > 0:
+                output += ", "
+            output += element
+        return output
 
     def __status_changes(self, online, offline):
         """
@@ -274,29 +291,38 @@ class Record:
             If streamers gets bigger find out who was added
             if streamers gets smaller find out who was removed
         """
+        went_offline = []
+        went_online = []
         online_or_offline = "online"
         if len(online) < len(self.__online):
             # differences are streamers who went offline
             online_or_offline = "offline"
-            differences = self.__find_differences_in_lists(self.__online, online)
+            went_offline = self.__find_differences_in_lists(self.__online, online)
         elif len(online) > len(self.__online):
             # differences are streamers who went online
-            differences = self.__find_differences_in_lists(online, self.__online)
+            went_online = self.__find_differences_in_lists(online, self.__online)
+        elif len(online) == len(self.__online):
+            went_online = self.__find_differences_in_lists(online, self.__online)
+            went_offline = self.__find_differences_in_lists(self.__online, online)
         else:
             return 0
 
         changed_streamers = ""
-        for idx, difference in enumerate(differences):
-            if idx > 0:
-                changed_streamers += ", "
-            changed_streamers += difference
+        if len(went_offline) > 0:
+            print(
+                f"\n----------[{self.__get_current_time()}] {self.__format_list(went_offline)} went offline----------\n"
+            )
+        if len(went_online) > 0:
+            print(
+                f"\n----------[{self.__get_current_time()}] {self.__format_list(went_online)} went online----------\n"
+            )
         self.__online = online.copy()
         self.__offline = offline.copy()
-        print(
-            f"\n----------[{self.__get_current_time()}] {changed_streamers} went {online_or_offline}----------\n"
-        )
-        print(f"online:  {online}")
-        print(f"offline: {offline}")
+        print(f"recording: {self.__recording}")
+        if self.__verbosity < 2:
+            print(f"online:  {online}")
+        if self.__verbosity < 1:
+            print(f"offline: {offline}")
 
     def start(self):
         while True:
