@@ -284,40 +284,63 @@ class Record:
             output += element
         return output
 
-    def __status_changes(self, online, offline):
+    def __get_changes(self, new, old):
+        """
+            recording smaller then stopped recording
+            recording bigger then started recording
+            recording same size then check if there were any changes
+        """
+        if len(new) < len(old):
+            # differences are offline or stopped
+            started = self.__find_differences_in_lists(old, new)
+        elif len(new) > len(old):
+            # differences are online or started
+            stopped = self.__find_differences_in_lists(new, old)
+        elif len(new) == len(old):
+            # check differences in both
+            started = self.__find_differences_in_lists(old, new)
+            stopped = self.__find_differences_in_lists(new, old)
+
+        return started, stopped
+
+    def __status_changes(self, online, offline, recording):
         """
             If online gets smaller than find out who went offline
             If online gets bigger than find out who went online
             If streamers gets bigger find out who was added
             if streamers gets smaller find out who was removed
         """
-        went_offline = []
-        went_online = []
-        online_or_offline = "online"
-        if len(online) < len(self.__online):
-            # differences are streamers who went offline
-            online_or_offline = "offline"
-            went_offline = self.__find_differences_in_lists(self.__online, online)
-        elif len(online) > len(self.__online):
-            # differences are streamers who went online
-            went_online = self.__find_differences_in_lists(online, self.__online)
-        elif len(online) == len(self.__online):
-            went_online = self.__find_differences_in_lists(online, self.__online)
-            went_offline = self.__find_differences_in_lists(self.__online, online)
-        else:
-            return 0
-
-        changed_streamers = ""
-        if len(went_offline) > 0:
-            print(
-                f"\n----------[{self.__get_current_time()}] {self.__format_list(went_offline)} went offline----------\n"
-            )
-        if len(went_online) > 0:
+        went_online, went_offline = self.__get_changes(online, self.__online)
+        started_recording, stopped_recording = self.__get_changes(
+            recording, self.__recording
+        )
+        if (
+            len(went_online)
+            == 0 & len(went_offline)
+            == 0 & len(started_recording)
+            == 0 & len(stopped_recording)
+            == 0
+        ):
+            return
+        if len(went_online) > 0 & self.__verbosity < 2:
             print(
                 f"\n----------[{self.__get_current_time()}] {self.__format_list(went_online)} went online----------\n"
             )
+        if len(went_offline) > 0 & self.__verbosity < 2:
+            print(
+                f"\n----------[{self.__get_current_time()}] {self.__format_list(went_offline)} went offline----------\n"
+            )
+        if len(started_recording) > 0 & self.__verbosity < 2:
+            print(
+                f"\n----------[{self.__get_current_time()}] {self.__format_list(started_recording)} started recording----------\n"
+            )
+        if len(stopped_recording) > 0 & self.__verbosity < 2:
+            print(
+                f"\n----------[{self.__get_current_time()}] {self.__format_list(stopped_recording)} stopped recording----------\n"
+            )
         self.__online = online.copy()
         self.__offline = offline.copy()
+        self.__recording = recording.copy()
         print(f"recording: {self.__recording}")
         if self.__verbosity < 2:
             print(f"online:  {online}")
@@ -326,20 +349,22 @@ class Record:
 
     def start(self):
         while True:
-            temp_online = []
-            temp_offline = []
+            temp_online = temp_offline = temp_recording = []
             self.__update_streamers()
             try:
                 self.__update_streamer_status()
                 for key, streamer in self.__streamers.items():
                     recording_status = self.__check_recording(streamer)
                     if streamer.get_live_status() == True:
+                        if streamer.get_recording_status() == True:
+                            temp_recording.append(streamer.get_name())
                         temp_online.append(streamer.get_name())
                     else:
                         temp_offline.append(streamer.get_name())
                 temp_online.sort()
                 temp_offline.sort()
-                self.__status_changes(temp_online, temp_offline)
+                temp_recording.sort()
+                self.__status_changes(temp_online, temp_offline, temp_recording)
             except ConnectionError as e:
                 logger.error("fatal error occured.", exc_info=True)
                 pass
