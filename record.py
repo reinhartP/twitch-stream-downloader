@@ -71,10 +71,11 @@ class Record:
                 self.__complete_directory,
             )
 
-    def __update_streamers(self):
+    def __read_config(self):
         logging.info("updating streamers from file")
         self.__config.read(self.__config_path)
         try:
+            self.__verbosity = int(self.__config["default"]["verbosity"])
             streamers = json.loads(self.__config["streamers"]["streamers"])
             forced_streamers = json.loads(
                 self.__config["streamers"]["forced_streamers"]
@@ -232,18 +233,18 @@ class Record:
             f"{streamer_name:16} - live: {str(live_status):5} - recording: {str(recording_status)}"
         )
         if live_status == True and recording_status == False:
-            print(f"[{current_time}] {streamer_name} recording started")
+            # print(f"\n----------[{self.__get_current_time()}] {streamer_name} recording started----------\n")
             streamer.start_recording()
             self.__recording.append(streamer.get_name())
             return 1
         elif live_status == False and recording_status == True:
-            print(f"[{current_time}] {streamer_name} offline")
+            # print(f"\n----------[{current_time}] {streamer_name} offline----------\n")
             streamer.stop_recording()
             self.__recording.remove(streamer.get_name())
             return -1
         elif recording_status == True and self.__check_file_size(streamer):
             print(
-                f"[{current_time}] {streamer_name} file size exceeded. Restarting recording."
+                f"\n----------[{current_time}] {streamer_name} file size exceeded. Restarting recording----------\n"
             )
             streamer.stop_recording()
             streamer.start_recording()
@@ -290,13 +291,14 @@ class Record:
             recording bigger then started recording
             recording same size then check if there were any changes
         """
-        started = stopped = []
+        started = []
+        stopped = []
         if len(new) < len(old):
             # differences are offline or stopped
-            started = self.__find_differences_in_lists(old, new)
+            stopped = self.__find_differences_in_lists(old, new)
         elif len(new) > len(old):
             # differences are online or started
-            stopped = self.__find_differences_in_lists(new, old)
+            started = self.__find_differences_in_lists(new, old)
         elif len(new) == len(old):
             # check differences in both
             started = self.__find_differences_in_lists(old, new)
@@ -316,26 +318,25 @@ class Record:
             recording, self.__recording
         )
         if (
-            len(went_online)
-            == 0 & len(went_offline)
-            == 0 & len(started_recording)
-            == 0 & len(stopped_recording)
-            == 0
+            len(went_online) == 0
+            and len(went_offline) == 0
+            and len(started_recording) == 0
+            and len(stopped_recording) == 0
         ):
             return
-        if len(went_online) > 0 & self.__verbosity < 2:
+        if len(went_online) > 0 and self.__verbosity < 2:
             print(
                 f"\n----------[{self.__get_current_time()}] {self.__format_list(went_online)} went online----------\n"
             )
-        if len(went_offline) > 0 & self.__verbosity < 2:
+        if len(went_offline) > 0 and self.__verbosity < 2:
             print(
                 f"\n----------[{self.__get_current_time()}] {self.__format_list(went_offline)} went offline----------\n"
             )
-        if len(started_recording) > 0 & self.__verbosity < 2:
+        if len(started_recording) > 0 and self.__verbosity < 2:
             print(
                 f"\n----------[{self.__get_current_time()}] {self.__format_list(started_recording)} started recording----------\n"
             )
-        if len(stopped_recording) > 0 & self.__verbosity < 2:
+        if len(stopped_recording) > 0 and self.__verbosity < 2:
             print(
                 f"\n----------[{self.__get_current_time()}] {self.__format_list(stopped_recording)} stopped recording----------\n"
             )
@@ -350,8 +351,10 @@ class Record:
 
     def start(self):
         while True:
-            temp_online = temp_offline = temp_recording = []
-            self.__update_streamers()
+            temp_online = []
+            temp_offline = []
+            temp_recording = []
+            self.__read_config()
             try:
                 self.__update_streamer_status()
                 for key, streamer in self.__streamers.items():
@@ -366,11 +369,11 @@ class Record:
                 temp_offline.sort()
                 temp_recording.sort()
                 self.__status_changes(temp_online, temp_offline, temp_recording)
-            except ConnectionError as e:
-                logger.error("fatal error occured.", exc_info=True)
+            except ConnectionError:
+                logger.error("error occured.", exc_info=True)
                 pass
 
-            time.sleep(15)
+            time.sleep(10)
 
     def cleanup(self):
         for key, streamer in self.__streamers.items():

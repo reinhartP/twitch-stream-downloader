@@ -1,6 +1,8 @@
 import requests
 import time
+import logging
 
+logger = logging.getLogger(__name__)
 
 class API:
     def __init__(
@@ -53,13 +55,16 @@ class API:
 
     def request(self, method, url, **kwargs):
         request = requests.Request(
-            method, url, headers=self.__headers(), **kwargs
+            method, url, headers=self.__headers(), **kwargs,
         ).prepare()
         self.__handle_rate_limit()
         while True:
             try:
                 response = requests.Session().send(request)
+                # with requests.Session() as s:
+                #     response = s.send(request)
             except ConnectionError:
+                logger.error("error occured.", exc_info=True)
                 raise
             self.__set_rate_limit(response)
 
