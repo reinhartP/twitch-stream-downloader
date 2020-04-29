@@ -1,9 +1,7 @@
 import time
-from datetime import datetime
 import subprocess
 import os
 import logging
-import signal
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +32,6 @@ class Streamer:
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            stdin=subprocess.PIPE,
         )
         self.__recording = True
         logger.info(
