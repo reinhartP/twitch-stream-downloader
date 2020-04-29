@@ -8,6 +8,7 @@ import json
 import traceback
 from streamer import Streamer
 from api import API as twitch
+from discord_bot import Bot
 
 logger = logging.getLogger(__name__)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
@@ -19,7 +20,8 @@ class Record:
         self.__config_path = os.path.join(self.__current_directory, "config.ini")
         self.__config = configparser.ConfigParser()
         self.__config.read(self.__config_path)
-        self.__discord_webhook = self.__config["default"]["discord_webhook"]
+        self.__discord_webhook = self.__config["discord"]["webhook"]
+
         self.__verbosity = int(self.__config["default"]["verbosity"])
         logging.basicConfig(
             filename=os.path.join(self.__current_directory, "app.log"),
@@ -30,7 +32,9 @@ class Record:
 
         self.__streamers = dict()
         self.__streamer_ids = dict()
-        self.__forced_streamers = []
+        self.__forced_streamers = json.loads(
+            self.__config["streamers"]["forced_streamers"]
+        )
         self.__capture_directory = os.path.normpath(
             self.__config["default"]["capture_directory"]
         )
@@ -51,16 +55,24 @@ class Record:
             "twitch_categories", "restrict"
         )
         self.__games = json.loads(self.__config["twitch_categories"]["games"])
+
         self.__online = []
         self.__offline = []
         self.__recording = []
-        self.__load_streamers()
-
-    def __load_streamers(self):
-        streamers = json.loads(self.__config["streamers"]["streamers"])
-        self.__forced_streamers = json.loads(
-            self.__config["streamers"]["forced_streamers"]
+        self.__create_streamers()
+        self.__bot_enable = self.__config["discord"]["bot_enable"]
+        if self.__bot_enable:
+            self.__bot_token = self.__config["discord"]["bot_token"]
+            self.__bot_channel_id = self.__config["discord"]["bot_channel_id"]
+            self.__status_msg_id = self.__config["discord"]["status_msg_id"]
+        self.__bot = Bot(
+            bot_token=self.__bot_token,
+            channel_id=self.__bot_channel_id,
+            msg_id=self.__status_msg_id,
         )
+
+    def __create_streamers(self):
+        streamers = self.__load_streamers()
         streamer_ids = self.__get_streamers_id(streamers)
         for streamer in streamers:
             streamer_name = streamer.lower()
@@ -71,11 +83,37 @@ class Record:
                 self.__complete_directory,
             )
 
+    def __load_streamers(self):
+        return json.loads(self.__config["streamers"]["streamers"])
+
+    def __get_streamers_id(self, streamers):
+        if time.time() > self.__bearer_token_expiration:
+            self.__update_bearer_token()
+
+        params = {"login": streamers}
+
+        response = self.__helix.request(
+            "GET", "https://api.twitch.tv/helix/users", params=params
+        )
+
+        streamers_with_id = dict()
+        for streamer in response["data"]:
+            streamers_with_id[streamer["login"]] = streamer["id"]
+            self.__streamer_ids[streamer["id"]] = streamer["login"]
+        return streamers_with_id
+
+    def __update_discord(self):
+        self.__bot.set_statuses(self.__recording, self.__online, self.__offline)
+        self.__status_msg_id = self.__bot.update_discord()
+        self.__config["discord"]["status_msg_id"] = self.__status_msg_id
+        self.__update_config()
+
     def __read_config(self):
         logging.info("updating streamers from file")
         self.__config.read(self.__config_path)
         try:
-            self.__verbosity = int(self.__config["default"]["verbosity"])
+            self.__verbosity = self.__config.getint("default", "verbosity")
+            self.__max_file_size = self.__config.getfloat("default", "max_file_size")
             streamers = json.loads(self.__config["streamers"]["streamers"])
             forced_streamers = json.loads(
                 self.__config["streamers"]["forced_streamers"]
@@ -154,22 +192,6 @@ class Record:
         with open(self.__config_path, "w") as f:
             self.__config.write(f)
 
-    def __get_streamers_id(self, streamers):
-        if time.time() > self.__bearer_token_expiration:
-            self.__update_bearer_token()
-
-        params = {"login": streamers}
-
-        response = self.__helix.request(
-            "GET", "https://api.twitch.tv/helix/users", params=params
-        )
-
-        streamers_with_id = dict()
-        for streamer in response["data"]:
-            streamers_with_id[streamer["login"]] = streamer["id"]
-            self.__streamer_ids[streamer["id"]] = streamer["login"]
-        return streamers_with_id
-
     def __update_bearer_token(self):
         self.__bearer_token = self.__helix.get_bearer_token()
         self.__bearer_token_expiration = self.__helix.get_bearer_token_expiration()
@@ -194,13 +216,13 @@ class Record:
             "GET", "https://api.twitch.tv/helix/streams", params=params
         )
 
-        current_time = self.__get_current_time()
-
         try:
             streamers = list(self.__streamers.keys())
             if len(response["data"]) > 0:
                 for streamer in response["data"]:  # go through online streamers
-                    username = self.__streamer_ids[streamer["user_id"]]
+                    username = self.__streamer_ids[
+                        streamer["user_id"]
+                    ]  # get username from id, twitch returns local name so it may return foreign characters
                     if (
                         self.__restrict_games == False
                         or streamer.get("game_id") in self.__games
@@ -208,17 +230,14 @@ class Record:
                     ):
                         self.__streamers[username].set_live_status(True)
                         streamers.remove(username)
-                for streamer in streamers:
-                    self.__streamers[streamer].set_live_status(False)
-            else:
-                for streamer in streamers:
-                    self.__streamers[streamer].set_live_status(False)
+            for streamer in streamers:  # set remaining streamers to offline
+                self.__streamers[streamer].set_live_status(False)
         except KeyError as e:
             print(f"keyerror {response}")
             print(e.args[0])
             time.sleep(30)
 
-    def __check_recording(self, streamer) -> int:
+    def __handle_recording(self, streamer) -> int:
         """
             If the streamer is live, check if recording, if not then start recording
             If the streamer is offline, check if recording, if it is recording then stop recording
@@ -257,13 +276,17 @@ class Record:
                 os.path.join(self.__capture_directory, streamer.get_filename())
             ).st_size
             logger.debug(f"{streamer.get_filename} is {file_size/(1024*1024)}MB")
-            if file_size > (1024 * 1024 * 1024 * 8.25):
-                return True
+            if self.__max_file_size != 0 and file_size < (
+                1024 * 1024 * 1024 * self.__max_file_size
+            ):
+                return False
         except FileNotFoundError:
-            # file was most likely deleted by user. return false which restarts recording
-            logger.error(f"{streamer.get_filename} not found. probably deleted by user")
+            # file was most likely deleted by user. return true which restarts recording
+            logger.error(
+                f"{streamer.get_filename()} not found. probably deleted by user"
+            )
             pass
-        return False
+        return True
 
     def __find_differences_in_lists(self, bigger, smaller):
         """
@@ -287,22 +310,24 @@ class Record:
 
     def __get_changes(self, new, old):
         """
-            recording smaller then stopped recording
-            recording bigger then started recording
-            recording same size then check if there were any changes
+            Finds changes in lists to determine who went online/offline or started/stopped recording.
+
+            Parameters:
+            new (list): The most updated version of a list
+            old (list): The previous version of a list
         """
         started = []
         stopped = []
         if len(new) < len(old):
-            # differences are offline or stopped
+            # streamers who went offline or stopped recording
             stopped = self.__find_differences_in_lists(old, new)
         elif len(new) > len(old):
-            # differences are online or started
+            # streamers who went online or started recording
             started = self.__find_differences_in_lists(new, old)
         elif len(new) == len(old):
-            # check differences in both
-            started = self.__find_differences_in_lists(old, new)
-            stopped = self.__find_differences_in_lists(new, old)
+            # unlikely situtation. same amount of streamers go online and offline at the same time
+            stopped = self.__find_differences_in_lists(old, new)
+            started = self.__find_differences_in_lists(new, old)
 
         return started, stopped
 
@@ -317,13 +342,24 @@ class Record:
         started_recording, stopped_recording = self.__get_changes(
             recording, self.__recording
         )
-        if (
+        self.__online = online.copy()
+        self.__offline = offline.copy()
+        self.__recording = recording.copy()
+        if (  # no changes
             len(went_online) == 0
             and len(went_offline) == 0
             and len(started_recording) == 0
             and len(stopped_recording) == 0
         ):
             return
+        self.__update_discord()
+        self.__print_status_changes(
+            went_online, went_offline, started_recording, stopped_recording
+        )
+
+    def __print_status_changes(
+        self, went_online, went_offline, started_recording, stopped_recording
+    ):
         if len(went_online) > 0 and self.__verbosity < 2:
             print(
                 f"\n----------[{self.__get_current_time()}] {self.__format_list(went_online)} went online----------\n"
@@ -340,14 +376,11 @@ class Record:
             print(
                 f"\n----------[{self.__get_current_time()}] {self.__format_list(stopped_recording)} stopped recording----------\n"
             )
-        self.__online = online.copy()
-        self.__offline = offline.copy()
-        self.__recording = recording.copy()
         print(f"recording: {self.__recording}")
         if self.__verbosity < 2:
-            print(f"online:  {online}")
+            print(f"online:  {self.__online}")
         if self.__verbosity < 1:
-            print(f"offline: {offline}")
+            print(f"offline: {self.__offline}")
 
     def start(self):
         while True:
@@ -358,7 +391,7 @@ class Record:
             try:
                 self.__update_streamer_status()
                 for key, streamer in self.__streamers.items():
-                    recording_status = self.__check_recording(streamer)
+                    recording_status = self.__handle_recording(streamer)
                     if streamer.get_live_status() == True:
                         if streamer.get_recording_status() == True:
                             temp_recording.append(streamer.get_name())
@@ -373,7 +406,7 @@ class Record:
                 logger.error("error occured.", exc_info=True)
                 pass
 
-            time.sleep(10)
+            time.sleep(5)
 
     def cleanup(self):
         for key, streamer in self.__streamers.items():
@@ -388,7 +421,6 @@ class Record:
 
 
 if __name__ == "__main__":
-    logger.info("program start")
     record = Record()
     try:
         record.start()
@@ -409,9 +441,15 @@ if __name__ == "__main__":
                     },
                 ],
             }
-            requests.post(
-                discord_webhook, headers={"Content-Type": "application/json"}, json=body
-            )
+            try:
+                requests.post(
+                    discord_webhook,
+                    headers={"Content-Type": "application/json"},
+                    json=body,
+                )
+            except:
+                logger.error("error occured while posting to discord.", exc_info=True)
+                pass
         logger.fatal("fatal error occured.", exc_info=True)
         print("some error occurred. cleaning up before exiting")
         record.cleanup()
