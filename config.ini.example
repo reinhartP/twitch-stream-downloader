@@ -2,10 +2,20 @@
 
 ; both directories can be the same. 
 ; both of the formats below work so does D:\
+; max_file_size = 0 for infinite
 [default]
 capture_directory = D:/capture
 complete_directory = D:\\complete
-discord_webhook = 
+max_file_size = 8
+
+
+[discord]
+bot_enable = False
+bot_token = 
+bot_channel_id = 
+status_msg_id = 
+webhook = 
+
 
 [twitch_categories]
 restrict = False
