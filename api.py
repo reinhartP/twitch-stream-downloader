@@ -1,4 +1,5 @@
 import requests
+import json
 import time
 import logging
 
@@ -31,7 +32,7 @@ class API:
 
     def __handle_rate_limit(self):
         if self.rate_limit_remaining == 0:
-            logger.error("rate limit reached")
+            logger.warning("rate limit reached")
             time_to_sleep = min(self.rate_limit_reset - time.time(), 10)
             time_to_sleep = max(time_to_sleep, 1)
 
@@ -72,10 +73,8 @@ class API:
         while True:
             try:
                 response = requests.Session().send(request)
-                # with requests.Session() as s:
-                #     response = s.send(request)
-            except ConnectionError:
-                logger.error("error occured.", exc_info=True)
+            except requests.exceptions.ConnectionError:
+                logger.error("requests.exception.ConnectionError", exc_info=True)
                 raise
             self.__set_rate_limit(response)
 
@@ -83,8 +82,11 @@ class API:
                 self.__handle_rate_limit()
             else:
                 break
-
-        return response.json()
+        try:
+            return response.json()
+        except json.decoder.JSONDecodeError:
+            logger.error("json error {response.text}", exc_info=True)
+            raise
 
     def get_bearer_token(self):
         return self.__bearer_token
