@@ -263,6 +263,8 @@ class Record:
         current_time = self.__get_current_time()
         streamer_name = streamer.get_name()
 
+        streamer.check_recording_process()
+
         live_status = streamer.get_live_status()
         recording_status = streamer.get_recording_status()
         logger.debug(
@@ -293,17 +295,17 @@ class Record:
                 os.path.join(self.__capture_directory, streamer.get_filename())
             ).st_size
             logger.debug(f"{streamer.get_filename} is {file_size/(1024*1024)}MB")
-            if self.__max_file_size != 0 and file_size < (
+            if self.__max_file_size != 0 and file_size > (
                 1024 * 1024 * 1024 * self.__max_file_size
             ):
-                return False
+                return True
         except FileNotFoundError:
             # file was most likely deleted by user. return true which restarts recording
             logger.error(
-                f"{streamer.get_filename()} not found. probably deleted by user"
+                f"{streamer.get_filename()} not found. File hasn't been created yet or file was deleted by user."
             )
             pass
-        return True
+        return False
 
     def __find_differences_in_lists(self, bigger, smaller):
         """
