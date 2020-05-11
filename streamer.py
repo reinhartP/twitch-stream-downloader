@@ -16,7 +16,7 @@ class Streamer:
         self.__recording = False
         self.__process = None
         self.__filename = None
-        logger.info(f"Created Streamer object for {name}")
+        logger.debug(f"Created Streamer object for {name}")
 
     def start_recording(self):
         file_time = time.strftime("%Y-%m-%d_%H-%M-%S")
@@ -34,7 +34,7 @@ class Streamer:
             stderr=subprocess.PIPE,
         )
         self.__recording = True
-        logger.info(
+        logger.debug(
             f"Started recording for {self.__name} ({self.__process.pid}) - {self.__filename}"
         )
 
@@ -52,10 +52,17 @@ class Streamer:
             logger.error(f"{self.__filename} not found. probably deleted by user")
             pass
         self.__filename = None
-        logger.info(f"Stopped recording for {self.__name} - {self.__filename}")
+        logger.debug(f"Stopped recording for {self.__name} - {self.__filename}")
 
     def __get_current_time(self) -> str:
         return time.strftime("%H:%M:%S")
+
+    def check_recording_process(self):
+        """
+            Check if the recording process has exited
+        """
+        if self.__process is not None and self.__process.poll() is not None:
+            self.stop_recording()
 
     def set_live_status(self, status: bool):
         self.__live = status
