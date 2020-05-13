@@ -24,18 +24,10 @@ class Bot:
         self.__new_msg()
         await self.__client.close()
 
-    def set_statuses(self, recording, online, offline):
-        self.__recording = recording
-        self.__online = online
-        self.__offline = offline
-
     def format_discord_list(self, list_to_format):
         return "`" + str(list_to_format) + "`"
 
     def __get_formatted_embed(self, **kwargs):
-        # recording = self.__format_discord_list(self.__recording)
-        # online = self.__format_discord_list(self.__online)
-        # offline = self.__format_discord_list(self.__offline)
         return {
             "title": self.__embed_template["title"],
             "description": self.__embed_template["description"].format(**kwargs),

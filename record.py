@@ -21,10 +21,7 @@ class Record:
     def __init__(self):
         self.__current_directory = os.path.dirname(os.path.realpath(__file__))
         self.__config_path = os.path.join(self.__current_directory, "config.ini")
-        self.__config = configparser.ConfigParser()
-        self.__config.read(self.__config_path)
-        self.__discord_webhook = self.__config["discord"]["webhook"]
-        self.__verbosity = int(self.__config["default"]["verbosity"])
+
         logging.basicConfig(
             filename=os.path.join(self.__current_directory, "app.log"),
             format="[%(levelname)s] %(asctime)s - %(name)s - %(message)s",
@@ -32,18 +29,23 @@ class Record:
             level=logging.INFO,
         )
 
-        self.__streamers = dict()
-        self.__streamer_ids = dict()
-        self.__forced_streamers = json.loads(
-            self.__config["streamers"]["forced_streamers"]
-        )
-        self.__paused_streamers = json.loads(self.__config["streamers"]["paused"])
+        self.__config = configparser.ConfigParser()
+        self.__config.read(self.__config_path)
+
         self.__capture_directory = os.path.normpath(
             self.__config["default"]["capture_directory"]
         )
         self.__complete_directory = os.path.normpath(
             self.__config["default"]["complete_directory"]
         )
+
+        self.__discord_webhook = self.__config["discord"]["webhook"]
+        self.__verbosity = self.__config.getint(("default")("verbosity"))
+        self.__restrict_games = self.__config.getboolean(
+            "twitch_categories", "restrict"
+        )
+        self.__games = json.loads(self.__config["twitch_categories"]["games"])
+
         self.__client_id = self.__config["twitchapi"]["client_id"]
         self.__client_secret = self.__config["twitchapi"]["client_secret"]
         self.__helix = twitch(
@@ -54,15 +56,20 @@ class Record:
         )
         self.__bearer_token_expiration = self.__helix.get_bearer_token_expiration()
         self.__bearer_token = self.__helix.get_bearer_token()
-        self.__restrict_games = self.__config.getboolean(
-            "twitch_categories", "restrict"
-        )
-        self.__games = json.loads(self.__config["twitch_categories"]["games"])
 
+        self.__forced_streamers = json.loads(
+            self.__config["streamers"]["forced_streamers"]
+        )
+        self.__paused_streamers = json.loads(self.__config["streamers"]["paused"])
+
+        self.__streamers = dict()
+        self.__streamer_ids = dict()
         self.__online = []
         self.__offline = []
         self.__recording = []
+
         self.__create_streamers()
+
         self.__bot_enable = self.__config["discord"]["bot_enable"]
         if self.__bot_enable:
             self.__bot_token = self.__config["discord"]["bot_token"]
@@ -111,7 +118,6 @@ class Record:
         return streamers_with_id
 
     def __update_discord(self):
-        # self.__bot.set_statuses(self.__recording, self.__online, self.__offline)
         self.__paused_streamers.sort()
         self.__status_msg_id = self.__bot.update_discord(
             recording=self.__bot.format_discord_list(self.__recording),
@@ -133,7 +139,7 @@ class Record:
             forced_streamers = json.loads(
                 self.__config["streamers"]["forced_streamers"]
             )
-            include = json.loads(self.__config.get("streamers", "include"))
+            include = json.loads(self.__config["streamers"]["include"])
             exclude = json.loads(self.__config["streamers"]["exclude"])
             force_include = json.loads(self.__config["streamers"]["force_include"])
             force_exclude = json.loads(self.__config["streamers"]["force_exclude"])
@@ -208,6 +214,7 @@ class Record:
             self.__config.write(f)
 
     def __update_bearer_token(self):
+        # Write bearer token to config
         self.__bearer_token = self.__helix.get_bearer_token()
         self.__bearer_token_expiration = self.__helix.get_bearer_token_expiration()
         self.__config.read(self.__config_path)
@@ -216,14 +223,8 @@ class Record:
         self.__update_config()
 
     def __update_streamer_status(self):
-        """
-            Check which streamers are online. Querying the endpoint returns which streamers are live, if they are
-            offline they aren't included in the response.
-            If the streamer is online, mark them as online.
-            If the streamer is offline, mark them as offline
-        """
-        if time.time() > self.__bearer_token_expiration:
-            self.__update_bearer_token()
+        # Check which streamers are online. Querying the endpoint returns which streamers are live,
+        # if they are offline they aren't included in the response.
 
         streamers = list(self.__streamers.keys())
 
@@ -231,6 +232,10 @@ class Record:
         response = self.__helix.request(
             "GET", "https://api.twitch.tv/helix/streams", params=params
         )
+
+        if time.time() > self.__bearer_token_expiration:
+            # write new bearer token to config
+            self.__update_bearer_token()
 
         try:
             # Go through streamers that are live
@@ -254,12 +259,13 @@ class Record:
             print(e.args[0])
             time.sleep(30)
 
-    def __handle_recording(self, streamer) -> int:
-        """
-            If the streamer is live, check if recording, if not then start recording
-            If the streamer is offline, check if recording, if it is recording then stop recording
-            Returns -1 if recording stopped, 0 if nothing happened, 1 if recording started, 2 if file size exceeded max(stop and start recording)
-        """
+    def __handle_recording(self, streamer):
+        # Chooses what to do based on a streamer's statuses
+        # If the streamer is live, check if recording, if not then start recording
+        # If the streamer is offline, check if recording, if it is recording then stop recording
+        # Returns -1 if recording stopped, 0 if nothing happened, 1 if recording started,
+        # 2 if file size exceeded max(stop and start recording)
+
         current_time = self.__get_current_time()
         streamer_name = streamer.get_name()
 
@@ -267,16 +273,16 @@ class Record:
 
         live_status = streamer.get_live_status()
         recording_status = streamer.get_recording_status()
+
         logger.debug(
             f"{streamer_name:16} - live: {str(live_status):5} - recording: {str(recording_status)}"
         )
+
         if live_status == True and recording_status == False:
-            # print(f"\n----------[{self.__get_current_time()}] {streamer_name} recording started----------\n")
             streamer.start_recording()
             self.__recording.append(streamer.get_name())
             return 1
         elif live_status == False and recording_status == True:
-            # print(f"\n----------[{current_time}] {streamer_name} offline----------\n")
             streamer.stop_recording()
             self.__recording.remove(streamer.get_name())
             return -1
@@ -300,7 +306,7 @@ class Record:
             ):
                 return True
         except FileNotFoundError:
-            # file was most likely deleted by user. return true which restarts recording
+            # streamlink hasn't created the file yet or user deleted file
             logger.error(
                 f"{streamer.get_filename()} not found. File hasn't been created yet or file was deleted by user."
             )
@@ -308,55 +314,31 @@ class Record:
         return False
 
     def __find_differences_in_lists(self, bigger, smaller):
-        """
-            Finds what's different in the "bigger" list (bigger list can be the same size as smaller)
-            [2,3,4] and [2,1,4] returns [3]
-            [2,1,4] and [2,3,4] returns [1]
-        """
+        # Finds what's different in the "bigger" list (bigger list can be the same size as smaller)
         differences = []
         for element in bigger:
             if element not in smaller:
                 differences.append(element)
         return differences
 
-    def __format_list(self, list_to_format):
-        output = ""
-        for idx, element in enumerate(list_to_format):
-            if idx > 0:
-                output += ", "
-            output += element
-        return output
-
     def __get_changes(self, new, old):
-        """
-            Finds changes in lists to determine who went online/offline or started/stopped recording.
-
-            Parameters:
-            new (list): The most updated version of a list
-            old (list): The previous version of a list
-        """
+        # Finds changes in lists to determine who went online/offline or started/stopped recording.
         started = []
         stopped = []
+        # streamers who went offline or stopped recording
         if len(new) < len(old):
-            # streamers who went offline or stopped recording
             stopped = self.__find_differences_in_lists(old, new)
+        # streamers who went online or started recording
         elif len(new) > len(old):
-            # streamers who went online or started recording
             started = self.__find_differences_in_lists(new, old)
+        # unlikely situtation. same amount of streamers go online and offline at the same time
         elif len(new) == len(old):
-            # unlikely situtation. same amount of streamers go online and offline at the same time
             stopped = self.__find_differences_in_lists(old, new)
             started = self.__find_differences_in_lists(new, old)
 
         return started, stopped
 
     def __status_changes(self, online, offline, recording):
-        """
-            If online gets smaller than find out who went offline
-            If online gets bigger than find out who went online
-            If streamers gets bigger find out who was added
-            if streamers gets smaller find out who was removed
-        """
         went_online, went_offline = self.__get_changes(online, self.__online)
         started_recording, stopped_recording = self.__get_changes(
             recording, self.__recording
@@ -365,7 +347,8 @@ class Record:
         self.__offline = offline.copy()
         self.__recording = recording.copy()
         self.__update_discord()
-        if (  # no changes
+        # no changes
+        if (
             len(went_online) == 0
             and len(went_offline) == 0
             and len(started_recording) == 0
@@ -379,27 +362,34 @@ class Record:
     def __print_status_changes(
         self, went_online, went_offline, started_recording, stopped_recording
     ):
-        if len(went_online) > 0 and self.__verbosity < 2:
-            print(
-                f"\n----------[{self.__get_current_time()}] {self.__format_list(went_online)} went online----------\n"
-            )
-        if len(went_offline) > 0 and self.__verbosity < 2:
-            print(
-                f"\n----------[{self.__get_current_time()}] {self.__format_list(went_offline)} went offline----------\n"
-            )
-        if len(started_recording) > 0 and self.__verbosity < 2:
-            print(
-                f"\n----------[{self.__get_current_time()}] {self.__format_list(started_recording)} started recording----------\n"
-            )
-        if len(stopped_recording) > 0 and self.__verbosity < 2:
-            print(
-                f"\n----------[{self.__get_current_time()}] {self.__format_list(stopped_recording)} stopped recording----------\n"
-            )
+        if self.__verbosity < 2:
+            if len(went_online) > 0:
+                print(
+                    f"\n----------[{self.__get_current_time()}] {self.__format_list(went_online)} went online----------\n"
+                )
+            if len(went_offline) > 0:
+                print(
+                    f"\n----------[{self.__get_current_time()}] {self.__format_list(went_offline)} went offline----------\n"
+                )
+            if len(started_recording) > 0:
+                print(
+                    f"\n----------[{self.__get_current_time()}] {self.__format_list(started_recording)} started recording----------\n"
+                )
+            if len(stopped_recording) > 0:
+                print(
+                    f"\n----------[{self.__get_current_time()}] {self.__format_list(stopped_recording)} stopped recording----------\n"
+                )
+
         print(f"recording: {self.__recording}")
+
         if self.__verbosity < 2:
             print(f"online:  {self.__online}")
-        if self.__verbosity < 1:
+        elif self.__verbosity < 1:
             print(f"offline: {self.__offline}")
+
+    def __format_list(self, list_to_format):
+        # Turn list into comma separated string
+        return ",".join(map(str, list_to_format))
 
     def start(self):
         while True:
