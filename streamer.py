@@ -26,6 +26,8 @@ class Streamer:
                 "streamlink",
                 "-o",
                 f"{os.path.join(self.__capture_path, self.__filename)}",
+                "--twitch-disable-hosting",
+                "--twitch-disable-reruns",
                 "--force",
                 f"twitch.tv/{self.__name}",
                 "best",
