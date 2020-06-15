@@ -81,12 +81,16 @@ class API:
             if response.status_code == 429:
                 self.__handle_rate_limit()
             else:
+                response.raise_for_status()
                 break
         try:
             return response.json()
-        except json.decoder.JSONDecodeError:
-            logger.error("json error {response.text}", exc_info=True)
-            raise
+        except ValueError:
+            logger.error(
+                f"json error. response status: {response.status_code}\n{response.text}",
+                exc_info=True,
+            )
+            return None
 
     def get_bearer_token(self):
         return self.__bearer_token
