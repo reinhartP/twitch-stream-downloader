@@ -17,7 +17,6 @@ class API:
         self.rate_limit_points = 800 if self.__bearer_token else 30
         self.rate_limit_remaining = self.rate_limit_points
         self.rate_limit_reset = 0
-        self.__handle_bearer_token()
 
     def __handle_bearer_token(self):
         if time.time() > self.__bearer_token_expiration:
@@ -69,7 +68,6 @@ class API:
             method, url, headers=self.__get_headers(), **kwargs,
         ).prepare()
         self.__handle_rate_limit()
-        self.__handle_bearer_token()
         while True:
             try:
                 response = requests.Session().send(request)
@@ -80,6 +78,11 @@ class API:
 
             if response.status_code == 429:
                 self.__handle_rate_limit()
+            elif response.status_code == 401:
+                self.__handle_bearer_token()
+                request = requests.Request(
+                    method, url, headers=self.__get_headers(), **kwargs,
+                ).prepare()
             else:
                 response.raise_for_status()
                 break
