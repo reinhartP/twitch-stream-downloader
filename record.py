@@ -306,7 +306,7 @@ class Record:
         elif (
             live_status == False
             and recording_status == True
-            and self.__check_file_size(streamer, 1024 * 1024 * 25)
+            and self.__check_file_size(streamer, 1024 * 1024 * 100)
         ):
             # streamer has gone offline
             # api has been showing streamer as offline soon after they go live so check file size before stopping the recording
@@ -314,7 +314,10 @@ class Record:
                 f"{streamer_name} has gone offline. stopping recording. these streamers are still recording {self.__recording}"
             )
             streamer.stop_recording()
-            self.__recording.remove(streamer_name)
+            try:
+                self.__recording.remove(streamer_name)
+            except ValueError:
+                logger.error(f"{streamer_name} not in recording list")
             return -1
         elif (
             self.__max_file_size != 0
