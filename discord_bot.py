@@ -13,7 +13,7 @@ class Bot:
         self.__client = discord.Client()
         self.on_ready = self.__client.event(self.on_ready)
 
-    def init_bot(self):
+    def __init_bot(self):
         self.__client.run(self.__bot_token)
 
     async def on_ready(self):
@@ -25,6 +25,8 @@ class Bot:
         await self.__client.close()
 
     def format_discord_list(self, list_to_format):
+        if list_to_format is None:
+            list_to_format = []
         return "`" + str(list_to_format) + "`"
 
     def __get_formatted_embed(self, **kwargs):
@@ -44,7 +46,7 @@ class Bot:
         )
         response = response.json()
         if response.get("message") == "Unauthorized":
-            init_bot()
+            __init_bot()
         else:
             return response.get("id")
         return None
