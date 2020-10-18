@@ -28,6 +28,9 @@ class Streamer:
                 f"{os.path.join(self.__capture_path, self.__filename)}",
                 "--twitch-disable-hosting",
                 "--twitch-disable-reruns",
+                "--twitch-disable-ads",
+                "--hls-timeout",
+                "100",
                 "--force",
                 f"twitch.tv/{self.__name}",
                 "best",
@@ -53,8 +56,10 @@ class Streamer:
         except FileNotFoundError:
             logger.error(f"{self.__filename} not found. probably deleted by user")
             pass
-        self.__filename = None
+
         logger.debug(f"Stopped recording for {self.__name} - {self.__filename}")
+
+        self.__filename = None
 
     def __get_current_time(self) -> str:
         return time.strftime("%H:%M:%S")
@@ -64,6 +69,10 @@ class Streamer:
             Check if the recording process has exited
         """
         if self.__process is not None and self.__process.poll() is not None:
+            # recording process has exited, most likely streamer went offline and api hasn't updated yet
+            logger.info(
+                f"{self.__name} - {self.__filename} recording process has exited."
+            )
             self.stop_recording()
 
     def set_live_status(self, status: bool):

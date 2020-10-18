@@ -1,4 +1,5 @@
 import logging
+import logging.handlers
 import requests
 import os
 import yaml
@@ -22,11 +23,13 @@ class Record:
         self.__current_directory = os.path.dirname(os.path.realpath(__file__))
         self.__config_path = os.path.join(self.__current_directory, "config.ini")
 
+        fileH = logging.handlers.TimedRotatingFileHandler("logs/log", when="midnight")
+        fileH.suffix = "_%Y-%m-%d_%H-%M-%S.log"
         logging.basicConfig(
-            filename=os.path.join(self.__current_directory, "app.log"),
             format="[%(levelname)s] %(asctime)s - %(name)s - %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
-            level=logging.INFO,
+            level=logging.DEBUG,
+            handlers=[fileH],
         )
 
         self.__config = configparser.ConfigParser()
@@ -40,7 +43,7 @@ class Record:
         )
 
         self.__discord_webhook = self.__config["discord"]["webhook"]
-        self.__verbosity = self.__config.getint(("default")("verbosity"))
+        self.__verbosity = self.__config.getint("default", "verbosity")
         self.__restrict_games = self.__config.getboolean(
             "twitch_categories", "restrict"
         )
@@ -106,13 +109,22 @@ class Record:
             self.__update_bearer_token()
 
         params = {"login": streamers}
-
-        response = self.__helix.request(
-            "GET", "https://api.twitch.tv/helix/users", params=params
-        )
+        while True:
+            try:
+                response = self.__helix.request(
+                    "GET", "https://api.twitch.tv/helix/users", params=params
+                )
+                break
+            except requests.exceptions.HTTPError:
+                logger.error(
+                    "Twitch is probably having issues. Trying again in 1 minute.",
+                    exc_info=True,
+                )
+                time.sleep(60)
+                pass
 
         streamers_with_id = dict()
-        for streamer in response["data"]:
+        for streamer in response.get("data"):
             streamers_with_id[streamer["login"]] = streamer["id"]
             self.__streamer_ids[streamer["id"]] = streamer["login"]
         return streamers_with_id
@@ -133,7 +145,12 @@ class Record:
         self.__config.read(self.__config_path)
         try:
             self.__verbosity = self.__config.getint("default", "verbosity")
-            self.__max_file_size = self.__config.getfloat("default", "max_file_size")
+            self.__restrict_games = self.__config.getboolean(
+                "twitch_categories", "restrict"
+            )
+            self.__max_file_size = (
+                1024 * 1024 * 1024 * self.__config.getfloat("default", "max_file_size")
+            )
             self.__paused_streamers = json.loads(self.__config["streamers"]["paused"])
             streamers = json.loads(self.__config["streamers"]["streamers"])
             forced_streamers = json.loads(
@@ -218,7 +235,7 @@ class Record:
         self.__bearer_token = self.__helix.get_bearer_token()
         self.__bearer_token_expiration = self.__helix.get_bearer_token_expiration()
         self.__config.read(self.__config_path)
-        self.__config["twitchapi"]["expires"] = self.__bearer_token_expiration
+        self.__config["twitchapi"]["expires"] = str(self.__bearer_token_expiration)
         self.__config["twitchapi"]["bearer_token"] = self.__bearer_token
         self.__update_config()
 
@@ -229,28 +246,32 @@ class Record:
         streamers = list(self.__streamers.keys())
 
         params = {"user_login": streamers}
-        response = self.__helix.request(
-            "GET", "https://api.twitch.tv/helix/streams", params=params
-        )
-
+        try:
+            response = self.__helix.request(
+                "GET", "https://api.twitch.tv/helix/streams", params=params
+            )
+        except requests.exceptions.HTTPError:
+            logger.error("Twitch is probably having issues.", exc_info=True)
+            return
+        if response is None:
+            return
         if time.time() > self.__bearer_token_expiration:
             # write new bearer token to config
             self.__update_bearer_token()
 
         try:
             # Go through streamers that are live
-            if len(response["data"]) > 0:
-                for streamer in response["data"]:
-                    # get username from id
-                    # twitch returns local name so it may return foreign characters
-                    username = self.__streamer_ids[streamer["user_id"]]
-                    if username not in self.__paused_streamers and (
-                        self.__restrict_games is False
-                        or streamer.get("game_id") in self.__games
-                        or username in self.__forced_streamers
-                    ):
-                        self.__streamers[username].set_live_status(True)
-                        streamers.remove(username)
+            for streamer in response.get("data"):
+                # get username from id
+                # twitch returns local name so it may return foreign characters
+                username = self.__streamer_ids[streamer["user_id"]]
+                if username not in self.__paused_streamers and (
+                    self.__restrict_games is False
+                    or streamer.get("game_id") in self.__games
+                    or username in self.__forced_streamers
+                ):
+                    self.__streamers[username].set_live_status(True)
+                    streamers.remove(username)
             # set remaining streamers to offline
             for username in streamers:
                 self.__streamers[username].set_live_status(False)
@@ -274,19 +295,35 @@ class Record:
         live_status = streamer.get_live_status()
         recording_status = streamer.get_recording_status()
 
-        logger.debug(
-            f"{streamer_name:16} - live: {str(live_status):5} - recording: {str(recording_status)}"
-        )
+        # logger.debug(
+        #     f"{streamer_name:16} - live: {str(live_status):5} - recording: {str(recording_status)}"
+        # )
 
         if live_status == True and recording_status == False:
             streamer.start_recording()
-            self.__recording.append(streamer.get_name())
+            self.__recording.append(streamer_name)
             return 1
-        elif live_status == False and recording_status == True:
+        elif (
+            live_status == False
+            and recording_status == True
+            and self.__check_file_size(streamer, 1024 * 1024 * 100)
+        ):
+            # streamer has gone offline
+            # api has been showing streamer as offline soon after they go live so check file size before stopping the recording
+            logger.debug(
+                f"{streamer_name} has gone offline. stopping recording. these streamers are still recording {self.__recording}"
+            )
             streamer.stop_recording()
-            self.__recording.remove(streamer.get_name())
+            try:
+                self.__recording.remove(streamer_name)
+            except ValueError:
+                logger.error(f"{streamer_name} not in recording list")
             return -1
-        elif recording_status == True and self.__check_file_size(streamer):
+        elif (
+            self.__max_file_size != 0
+            and recording_status == True
+            and self.__check_file_size(streamer, self.__max_file_size)
+        ):
             print(
                 f"\n----------[{current_time}] {streamer_name} file size exceeded. Restarting recording----------\n"
             )
@@ -295,20 +332,18 @@ class Record:
             return 2
         return 0
 
-    def __check_file_size(self, streamer):
+    def __check_file_size(self, streamer, target_file_size):
         try:
             file_size = os.stat(
                 os.path.join(self.__capture_directory, streamer.get_filename())
             ).st_size
-            logger.debug(f"{streamer.get_filename} is {file_size/(1024*1024)}MB")
-            if self.__max_file_size != 0 and file_size > (
-                1024 * 1024 * 1024 * self.__max_file_size
-            ):
+            logger.debug(f"{streamer.get_filename()} is {file_size/(1024*1024)}MB")
+            if file_size > target_file_size:
                 return True
         except FileNotFoundError:
             # streamlink hasn't created the file yet or user deleted file
             logger.error(
-                f"{streamer.get_filename()} not found. File hasn't been created yet or file was deleted by user."
+                f"{os.path.join(self.__capture_directory, streamer.get_filename())} not found. File hasn't been created yet or file was deleted by user."
             )
             pass
         return False
