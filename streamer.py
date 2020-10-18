@@ -29,6 +29,8 @@ class Streamer:
                 "--twitch-disable-hosting",
                 "--twitch-disable-reruns",
                 "--twitch-disable-ads",
+                "--hls-timeout",
+                "100",
                 "--force",
                 f"twitch.tv/{self.__name}",
                 "best",
